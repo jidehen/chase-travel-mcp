@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import sys
 from pathlib import Path
 import json
@@ -106,36 +106,54 @@ def search_flights_internal(origin: str, destination: str) -> List[Dict[str, Any
     logger.info(f"Found {len(flights)} flights for route {route}")
     return flights
 
-async def search_flights(request: FlightSearchRequest) -> FlightSearchResponse:
+@mcp.tool()
+async def search_flights(
+    origin: str,
+    destination: str,
+    departure_date: str,
+    return_date: Optional[str] = None,
+    passengers: Optional[Dict[str, int]] = None,
+    cabin_class: str = "ECONOMY"
+) -> Dict[str, Any]:
     """
-    Search for flights between two cities.
+    Search for available flights between two airports.
     
     Args:
-        request: The flight search request containing origin and destination
-        
+        origin: IATA airport code for departure (e.g., 'JFK', 'LAX')
+        destination: IATA airport code for arrival (e.g., 'LHR', 'CDG')
+        departure_date: Departure date in YYYY-MM-DD format
+        return_date: Optional return date in YYYY-MM-DD format
+        passengers: Optional dict with keys 'adults' (1-9), 'children' (0-9), 'infants' (0-9)
+        cabin_class: Desired cabin class (ECONOMY, PREMIUM_ECONOMY, BUSINESS, FIRST)
+    
     Returns:
-        FlightSearchResponse: The flight search response
+        Dict containing:
+        - flights: List of available flights with airline, flight number, times, and price
+        - request_id: Unique identifier for the search request
+        - timestamp: Request timestamp
+    
+    Example request:
+        {
+            "origin": "JFK",
+            "destination": "LHR",
+            "departure_date": "2024-03-20",
+            "passengers": {"adults": 2},
+            "cabin_class": "ECONOMY"
+        }
     """
     request_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    logger.info(f"[{request_id}] Received flight search request: {request.origin} -> {request.destination}")
+    logger.info(f"[{request_id}] Received flight search request: {origin} -> {destination}")
     
     try:
-        flights = search_flights_internal(request.origin, request.destination)
+        flights = search_flights_internal(origin, destination)
         
-        response_flights = [
-            Flight(
-                airline=flight["airline"],
-                flight_number=flight["flight_number"],
-                departure_time=flight["departure_time"],
-                arrival_time=flight["arrival_time"],
-                price=flight["price"],
-                class_type=flight["class"]
-            )
-            for flight in flights
-        ]
+        response = {
+            "flights": flights,
+            "request_id": request_id,
+            "timestamp": datetime.now().isoformat()
+        }
         
-        response = FlightSearchResponse(flights=response_flights)
-        logger.info(f"[{request_id}] Successfully processed request. Found {len(response_flights)} flights")
+        logger.info(f"[{request_id}] Successfully processed request. Found {len(flights)} flights")
         return response
         
     except TravelSearchError as e:
@@ -160,12 +178,6 @@ async def search_flights(request: FlightSearchRequest) -> FlightSearchResponse:
                 "error": str(e)
             }
         )
-
-# Register MCP tool
-@mcp.tool()
-async def search_flights_tool(request: FlightSearchRequest) -> FlightSearchResponse:
-    """MCP tool for searching flights."""
-    return await search_flights(request)
 
 if __name__ == "__main__":
     logger.info("Starting Chase Travel MCP server")
