@@ -1,15 +1,16 @@
 import logging
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
+from typing import List, Dict, Any
 import sys
 from pathlib import Path
+import json
+from datetime import datetime
 
 # Add the parent directory to Python path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from mcp.server.fastmcp import FastMCP
 from model.flight_search_request import FlightSearchRequest
-from model.flight_search_response import FlightSearchResponse
+from model.flight_search_response import FlightSearchResponse, Flight
 
 # Configure logging
 logging.basicConfig(
@@ -19,179 +20,153 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Mock flight data
-MOCK_FLIGHTS = [
-    {
-        "flight_id": "AA100",
-        "airline": "American Airlines",
-        "origin": "JFK",
-        "destination": "MIA",
-        "departure_time": "08:00",
-        "arrival_time": "11:00",
-        "duration": "3h 00m",
-        "stops": 0,
-        "price": 299.99,
-        "class": "economy"
-    },
-    {
-        "flight_id": "DL200",
-        "airline": "Delta",
-        "origin": "JFK",
-        "destination": "MIA",
-        "departure_time": "10:30",
-        "arrival_time": "13:45",
-        "duration": "3h 15m",
-        "stops": 0,
-        "price": 349.99,
-        "class": "economy"
-    },
-    {
-        "flight_id": "UA300",
-        "airline": "United",
-        "origin": "LAX",
-        "destination": "LAS",
-        "departure_time": "09:15",
-        "arrival_time": "10:30",
-        "duration": "1h 15m",
-        "stops": 0,
-        "price": 199.99,
-        "class": "economy"
-    },
-    {
-        "flight_id": "B6500",
-        "airline": "JetBlue",
-        "origin": "LAX",
-        "destination": "LAS",
-        "departure_time": "14:00",
-        "arrival_time": "15:15",
-        "duration": "1h 15m",
-        "stops": 0,
-        "price": 179.99,
-        "class": "economy"
-    },
-    {
-        "flight_id": "WN400",
-        "airline": "Southwest",
-        "origin": "JFK",
-        "destination": "MIA",
-        "departure_time": "13:00",
-        "arrival_time": "16:30",
-        "duration": "3h 30m",
-        "stops": 1,
-        "price": 249.99,
-        "class": "economy"
-    }
-]
-
-# City to airport mappings
-CITY_AIRPORTS = {
-    "NYC": ["JFK", "LGA", "EWR"],
-    "LA": ["LAX", "BUR", "ONT"],
-    "CHI": ["ORD", "MDW"],
-    "MIA": ["MIA", "FLL"],
-    "LAS": ["LAS"]
+MOCK_FLIGHTS = {
+    "JFK-LHR": [
+        {
+            "airline": "British Airways",
+            "flight_number": "BA178",
+            "departure_time": "10:00",
+            "arrival_time": "22:00",
+            "price": 800.00,
+            "class": "economy"
+        },
+        {
+            "airline": "American Airlines",
+            "flight_number": "AA100",
+            "departure_time": "11:00",
+            "arrival_time": "23:00",
+            "price": 850.00,
+            "class": "economy"
+        },
+        {
+            "airline": "United Airlines",
+            "flight_number": "UA880",
+            "departure_time": "12:00",
+            "arrival_time": "00:00",
+            "price": 900.00,
+            "class": "economy"
+        },
+        {
+            "airline": "Delta",
+            "flight_number": "DL400",
+            "departure_time": "13:00",
+            "arrival_time": "01:00",
+            "price": 950.00,
+            "class": "economy"
+        }
+    ]
 }
 
 # Initialize FastMCP server
 mcp = FastMCP("ChaseTravel")
 
-def get_airports_for_city(city: str) -> List[str]:
-    """
-    Get all airports for a given city.
-    
-    Args:
-        city: The city code (e.g., "NYC", "LA")
-        
-    Returns:
-        List[str]: List of airport codes for the city
-    """
-    return CITY_AIRPORTS.get(city.upper(), [city.upper()])
+class TravelSearchError(Exception):
+    """Custom exception for travel search errors."""
+    def __init__(self, message: str, error_code: str, details: Dict[str, Any] = None):
+        self.message = message
+        self.error_code = error_code
+        self.details = details or {}
+        super().__init__(self.message)
 
-def filter_flights(
-    flights: List[Dict[str, Any]],
-    origin: str,
-    destination: str,
-    departure_date: str,
-    return_date: Optional[str],
-    passengers: int,
-    class_type: str
-) -> List[Dict[str, Any]]:
+def search_flights_internal(origin: str, destination: str) -> List[Dict[str, Any]]:
     """
-    Filter flights based on search criteria.
+    Search for flights between two cities.
     
     Args:
-        flights: List of all available flights
         origin: Origin city code
         destination: Destination city code
-        departure_date: Departure date
-        return_date: Return date (optional)
-        passengers: Number of passengers
-        class_type: Class type (economy, business, first)
         
     Returns:
-        List[Dict[str, Any]]: Filtered list of flights
+        List[Dict[str, Any]]: List of available flights
+        
+    Raises:
+        TravelSearchError: If route not found or other errors occur
     """
-    origin_airports = get_airports_for_city(origin)
-    dest_airports = get_airports_for_city(destination)
+    logger.info(f"Processing flight search request: {origin} -> {destination}")
     
-    filtered_flights = []
-    for flight in flights:
-        if (flight["origin"] in origin_airports and 
-            flight["destination"] in dest_airports and
-            flight["class"] == class_type.lower()):
-            filtered_flights.append(flight)
+    if not origin or not destination:
+        raise TravelSearchError(
+            "Missing origin or destination",
+            "MISSING_ROUTE_INFO",
+            {"required": "Both origin and destination must be provided"}
+        )
     
-    return filtered_flights
+    route = f"{origin}-{destination}"
+    if route not in MOCK_FLIGHTS:
+        raise TravelSearchError(
+            f"No flights found for route {route}",
+            "ROUTE_NOT_FOUND",
+            {
+                "invalid_route": route,
+                "available_routes": list(MOCK_FLIGHTS.keys())
+            }
+        )
+    
+    flights = MOCK_FLIGHTS[route]
+    logger.info(f"Found {len(flights)} flights for route {route}")
+    return flights
 
-@mcp.tool()
-async def search_flights(request: FlightSearchRequest) -> List[FlightSearchResponse]:
+async def search_flights(request: FlightSearchRequest) -> FlightSearchResponse:
     """
-    Search for flights based on the provided criteria.
+    Search for flights between two cities.
     
     Args:
-        request: The flight search request containing search parameters
+        request: The flight search request containing origin and destination
         
     Returns:
-        List[FlightSearchResponse]: List of matching flights
+        FlightSearchResponse: The flight search response
     """
-    logger.info(f"Searching flights from {request.origin} to {request.destination}")
+    request_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    logger.info(f"[{request_id}] Received flight search request: {request.origin} -> {request.destination}")
     
     try:
-        # Filter flights based on search criteria
-        matching_flights = filter_flights(
-            MOCK_FLIGHTS,
-            request.origin,
-            request.destination,
-            request.departure_date,
-            request.return_date,
-            request.passengers,
-            request.class_type
-        )
+        flights = search_flights_internal(request.origin, request.destination)
         
-        # Convert to response objects
         response_flights = [
-            FlightSearchResponse(
-                flight_id=flight["flight_id"],
+            Flight(
                 airline=flight["airline"],
-                origin=flight["origin"],
-                destination=flight["destination"],
+                flight_number=flight["flight_number"],
                 departure_time=flight["departure_time"],
                 arrival_time=flight["arrival_time"],
-                duration=flight["duration"],
-                stops=flight["stops"],
                 price=flight["price"],
                 class_type=flight["class"]
             )
-            for flight in matching_flights
+            for flight in flights
         ]
         
-        logger.info(f"Found {len(response_flights)} matching flights")
-        return response_flights
+        response = FlightSearchResponse(flights=response_flights)
+        logger.info(f"[{request_id}] Successfully processed request. Found {len(response_flights)} flights")
+        return response
         
+    except TravelSearchError as e:
+        logger.error(f"[{request_id}] Travel search error: {str(e)}", exc_info=True)
+        raise TravelSearchError(
+            e.message,
+            e.error_code,
+            {
+                **e.details,
+                "request_id": request_id,
+                "timestamp": datetime.now().isoformat()
+            }
+        )
     except Exception as e:
-        error_msg = f"Error searching flights: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        return []
+        logger.error(f"[{request_id}] Unexpected error: {str(e)}", exc_info=True)
+        raise TravelSearchError(
+            "An unexpected error occurred while processing the request",
+            "INTERNAL_ERROR",
+            {
+                "request_id": request_id,
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e)
+            }
+        )
+
+# Register MCP tool
+@mcp.tool()
+async def search_flights_tool(request: FlightSearchRequest) -> FlightSearchResponse:
+    """MCP tool for searching flights."""
+    return await search_flights(request)
 
 if __name__ == "__main__":
-    logger.info("Starting ChaseTravel MCP server")
+    logger.info("Starting Chase Travel MCP server")
     mcp.run() 
